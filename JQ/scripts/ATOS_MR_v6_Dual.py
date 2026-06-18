@@ -769,14 +769,7 @@ def _execute_pending_orders_impl(context):
         if sell_shares <= 0:
             del g.holdings[stock]
             continue
-        # Diagnostic: check JQ portfolio vs our tracking
-        jq_pos = context.portfolio.positions[stock] if stock in context.portfolio.positions else None
-        jq_shares = int(jq_pos.closeable_amount) if jq_pos else 0
-        if jq_shares < sell_shares:
-            log.error('[SELL-FAIL] %s our=%d jq_closeable=%d price=%.2f reason=%s' %
-                     (stock, sell_shares, jq_shares, exec_price, reason))
-            new_pending_sells.append((stock, ratio, reason, queue_date))
-            continue
+
         order_result = None
         if stock.startswith('688'):
             limit_price = min(exec_price * 0.995, 9999.99)
@@ -787,16 +780,15 @@ def _execute_pending_orders_impl(context):
                 continue
         else:
             try:
-                order_result = order(stock, -sell_shares)
+                order_result = order_target_value(stock, 0)
             except Exception:
                 new_pending_sells.append((stock, ratio, reason, queue_date))
                 continue
-        # JQ may return None on silent failure without throwing
-        if order_result is None:
+        # None = JQ rejected, filled=0 = could not execute
+        if order_result is None or (hasattr(order_result, 'filled') and order_result.filled == 0):
             new_pending_sells.append((stock, ratio, reason, queue_date))
             continue
-        log.info('[SELL-DONE] %s @ %.2f shares=%d reason=%s' %
-                 (stock, exec_price, sell_shares, reason))
+        log.info('[SELL-DONE] %s @ %.2f reason=%s' % (stock, exec_price, reason))
         del g.holdings[stock]
 
     g.pending_sells = new_pending_sells
@@ -851,7 +843,7 @@ def _execute_pending_orders_impl(context):
                 order_result = order(stock, shares)
             except Exception:
                 continue
-        if order_result is None:
+        if order_result is None or (hasattr(order_result, 'filled') and order_result.filled == 0):
             continue
 
         cash -= shares * last_price * 1.001
