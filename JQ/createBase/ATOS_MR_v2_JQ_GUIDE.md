@@ -6,6 +6,41 @@
 
 ---
 
+## 0. 核心教训：为什么从本地到聚宽会反复踩坑
+
+### 错误思维链
+
+```
+本地回测架构（T close 信号 → pending 队列 → T+1 open 执行）
+     ↓ 直接翻译
+聚宽脚本（3×run_daily + g.pending_buys/sells + .append() + order(-shares)）
+     ↓ 聚宽环境特有行为
+每个环节都出问题 → 只买不卖、现金耗尽、队列消失
+```
+
+### 根本原因：跨平台移植时的三个错误假设
+
+| 假设 | 本地 Python | 聚宽现实 |
+|------|------------|---------|
+| "列表 `.append()` 肯定有效" | ✅ 普通 Python list | ❌ JQ 的 `g` 对象代理可能丢弃原地修改 |
+| "`order(stock, -shares)` 和 `order(stock, shares)` 一样可靠" | ✅ 本地直接操作现金和持仓 | ❌ JQ 需要 `order_target_value(stock,0)` 清仓 |
+| "`np.busday_count` 是 numpy 标配" | ✅ 完整 numpy | ❌ JQ 的 numpy 是精简版 |
+| "多函数 `run_daily` + 队列传递状态是标准做法" | ✅ 本地单进程内存 | ❌ JQ 的 `g` 代理在函数间传递列表不可靠 |
+
+### 黄金法则：写聚宽脚本前必须遵守
+
+1. **先找已验证的模板**，用它的架构，替换策略逻辑。不要从零设计 JQ 架构。
+2. **单一 `run_daily` at 09:30**：所有决策+执行在一个函数内完成，不跨函数传递队列。
+3. **不用 `g.xxx.append()`**：列表修改统一用 `g.xxx = g.xxx + [item]` 整体赋值。
+4. **卖出用 `order_target_value(stock, 0)`**：让 JQ 自己算股数，不和手动 `g.holdings` 耦合。
+5. **下单后检查返回值**：`order_result is None` 或 `filled == 0` 都算失败。
+6. **关键函数必须 try/except 包裹**：一个静默异常就会让策略"在运行但实际每天跳空"。
+7. **显式 `import numpy as np`**：不依赖 JQ 预导入。
+
+> 这些法则背后的具体案例和修复代码，详见 §8 和 §2。
+
+---
+
 ## 1. 策略逻辑映射 (本地 -> JQ)
 
 | 本地 (mr_v2.py) | JQ 等价实现 | 备注 |

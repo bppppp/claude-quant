@@ -447,6 +447,32 @@ def backtest_v2(start='2018-01-01', end='2022-12-31',
                                             candidates.append((sym, 99, 2, c))  # prio=2, RSI虚拟
                         except Exception:
                             pass
+
+                # v7: 突破前高信号 (20日新高+趋势确认)
+                if len(candidates) < n_to_buy:
+                    for sym, df in stock_data.items():
+                        if sym in positions or sym in [p[0] for p in pending_buys]: continue
+                        if date not in df.index: continue
+                        if trading_universe is not None and sym not in trading_universe: continue
+                        try:
+                            idx = df.index.get_loc(date)
+                            if idx < 25: continue
+                            close_v = df['close']
+                            if isinstance(close_v, pd.DataFrame): close_v = close_v.iloc[:, 0]
+                            high_v = df['high']
+                            if isinstance(high_v, pd.DataFrame): high_v = high_v.iloc[:, 0]
+                            c = float(close_v.iloc[idx])
+                            h20 = float(high_v.iloc[idx-20:idx].max())
+                            ma20 = float(close_v.rolling(20).mean().iloc[idx])
+                            ma60 = float(close_v.rolling(60).mean().iloc[idx])
+                            if np.isfinite(ma20) and np.isfinite(ma60):
+                                if c > h20 and ma20 > ma60:
+                                    if 'is_st' not in df.columns or not bool(df.loc[date, 'is_st']):
+                                        if 'volume' not in df.columns or float(df.loc[date, 'volume']) > 0:
+                                            candidates.append((sym, 50, 3, c))
+                        except Exception:
+                            pass
+
                 # 排序: 主信号优先, RSI升序, 趋势最后
                 candidates.sort(key=lambda x: (x[2], x[1]))
                 for cand in candidates[:n_to_buy]:
