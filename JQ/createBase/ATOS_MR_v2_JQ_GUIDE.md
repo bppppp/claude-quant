@@ -539,7 +539,7 @@ log.info("[%s] regime=%s, holdings=%d, pending_buys=%d, pending_sells=%d, signal
 
 ---
 
-## 8. 血泪教训：聚宽调试中发现的致命问题
+## 8. 聚宽实战经验（完整汇总）
 
 ### 8.1 ⚠️ 循环内 `cash` 变量不更新 → 瞬间满仓耗尽资金
 
@@ -684,6 +684,56 @@ if order_result is None or (hasattr(order_result, 'filled') and order_result.fil
     continue  # 没买到, 不记录持仓
 # 只有 filled > 0 才记入 g.holdings
 ```
+
+### 8.6 ⚠️ `g.pending_sells.append()` 在聚宽静默失败 → 永远用整体赋值
+
+**症状**: 14:50 日志显示 `[SELL]` 触发、`should_sell=True`、代码走到了 `g.pending_sells.append(...)`，但摘要日志显示 `pending_sells=0`，次日 09:30 `sells=0`。
+
+**根因**: JQ 的 `g` 对象对列表属性的**原地修改**（`.append()`、`.extend()`）可能被静默丢弃。只有**整体赋值**（`g.xxx = new_list`）才能可靠保存。
+
+**修复**:
+```python
+# 错: 原地修改
+g.pending_sells.append((stock, 1.0, reason, today))
+
+# 对: 整体赋值
+g.pending_sells = g.pending_sells + [(stock, 1.0, reason, today)]
+```
+
+**适用范围**: 所有对 `g` 对象属性的列表修改操作，包括 `g.pending_buys`。
+
+### 8.7 ✅ 终极方案：不用 pending 队列，单一 `daily_handle` 架构
+
+经过反复调试，pending 队列在 JQ 中存在多个不可靠点（`.append()` 静默失败、`g` 属性跨 `run_daily` 持久化不稳定、09:30/14:50 调度时序依赖）。**最优解是参考已验证的模板策略，彻底取消 pending 队列**。
+
+**旧架构（有问题）**:
+```
+run_daily(before_market_open, '09:00')  → detect regime
+run_daily(execute_pending_orders, '09:30') → 处理昨天的买卖队列
+run_daily(check_signals_and_queue_orders, '14:50') → 判断信号, 排队
+```
+4 个函数互相依赖，`g.pending_buys/sells` 队列在两次 `run_daily` 之间传递。
+
+**新架构（可靠）**:
+```
+run_daily(daily_handle, '09:30')  → 一次完成所有事
+```
+```python
+def daily_handle(context):
+    if g.bar_index == 1: return   # 首日跳过
+    g.regime = detect_regime_jq(context)
+    # Step 1: 更新持仓 (用 T-1 收盘价)
+    # Step 2: 出场检查 → 直接 order_target_value(stock,0) 卖出
+    # Step 3: 入场信号 → 直接 order(stock, shares) 买入
+```
+
+**优势**:
+- 无 pending 队列 → 无 `g.xxx.append()` 问题
+- 无跨函数状态传递 → 无调度时序依赖
+- 卖出用 `order_target_value(stock, 0)` → JQ 自己算股数
+- 和已验证的模板策略架构一致 → 可靠
+
+**代价**: 信号使用 T-1 收盘数据（`history()` 在 09:30 只能拿到昨天的），比本地回测（T close 数据）延迟 1 天。结果会略保守，但不影响策略有效性验证。
 
 **Q6: 调试?**
 A: log.info() 输出到日志, record() 保存到收益图。
