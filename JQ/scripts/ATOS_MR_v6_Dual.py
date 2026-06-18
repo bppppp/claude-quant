@@ -5,6 +5,7 @@ Params: mp=22, ps=17%, hold=8, sl=-2%, tp=30%
 Dual Signal: MR (drop+RSI) + Trend (MA20 breakthrough + volume)
 Local: annual ~39.2% (2018-2022), DD ~-14%, Sharpe ~1.78
 """
+import numpy as np
 
 STOCK_POOL = "ALL"
 
@@ -694,17 +695,21 @@ def _check_signals_and_queue_orders_impl(context):
             reason = 'crash'
 
         if should_sell:
+            log.info('[SELL] %s reason=%s ret=%.2f%% held=%dd' %
+                     (stock, reason, ret*100, days_held))
             already = any(p[0] == stock for p in g.pending_sells)
             if not already:
                 g.pending_sells.append((stock, 1.0, reason, today))
             pos['last_close'] = cur_close
 
     g.rebalance_count += 1
-    if g.rebalance_count % 60 == 0:
+    if len(signals) > 0 or len(g.pending_sells) > 0 or len(g.pending_buys) > 0:
         log.info('[%s] signals=%d, trend=%d, pending_buys=%d, pending_sells=%d'
                  % (today, len(signals),
                     len(trend_candidates) if 'trend_candidates' in dir() else 0,
                     len(g.pending_buys), len(g.pending_sells)))
+    elif g.rebalance_count % 60 == 0:
+        log.info('[%s] signals=0, pending=0' % today)
 
 
 # ==================== T+1 09:30 Execution ====================

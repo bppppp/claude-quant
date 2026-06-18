@@ -4,6 +4,7 @@ ATOS MR v5 OPTIMIZED
 Params: mp=12,ps=22%,hold=14,sl=-3%
 Local: annual ~28.51%, MDD ~-18%
 """
+import numpy as np
 
 STOCK_POOL = "HS300"
 
