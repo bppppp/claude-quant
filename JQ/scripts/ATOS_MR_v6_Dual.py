@@ -770,25 +770,34 @@ def _execute_pending_orders_impl(context):
             del g.holdings[stock]
             continue
 
+        log.info('[SELL-TRY] %s shares=%d price=%.2f reason=%s' %
+                 (stock, sell_shares, exec_price, reason))
         order_result = None
         if stock.startswith('688'):
             limit_price = min(exec_price * 0.995, 9999.99)
             try:
                 order_result = order(stock, -sell_shares, LimitOrderStyle(limit_price))
-            except Exception:
+            except Exception as e:
+                log.error('[SELL-ERR] %s exception=%s' % (stock, str(e)))
                 new_pending_sells.append((stock, ratio, reason, queue_date))
                 continue
         else:
             try:
                 order_result = order_target_value(stock, 0)
-            except Exception:
+            except Exception as e:
+                log.error('[SELL-ERR] %s exception=%s' % (stock, str(e)))
                 new_pending_sells.append((stock, ratio, reason, queue_date))
                 continue
-        # None = JQ rejected, filled=0 = could not execute
-        if order_result is None or (hasattr(order_result, 'filled') and order_result.filled == 0):
+        if order_result is None:
+            log.warn('[SELL-NONE] %s order() returned None' % stock)
             new_pending_sells.append((stock, ratio, reason, queue_date))
             continue
-        log.info('[SELL-DONE] %s @ %.2f reason=%s' % (stock, exec_price, reason))
+        if hasattr(order_result, 'filled') and order_result.filled == 0:
+            log.warn('[SELL-0FILL] %s filled=0' % stock)
+            new_pending_sells.append((stock, ratio, reason, queue_date))
+            continue
+        log.info('[SELL-DONE] %s @ %.2f reason=%s filled=%d' %
+                 (stock, exec_price, reason, order_result.filled))
         del g.holdings[stock]
 
     g.pending_sells = new_pending_sells
