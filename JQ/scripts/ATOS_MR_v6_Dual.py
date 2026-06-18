@@ -700,6 +700,7 @@ def _check_signals_and_queue_orders_impl(context):
             already = any(p[0] == stock for p in g.pending_sells)
             if not already:
                 g.pending_sells.append((stock, 1.0, reason, today))
+                log.info('[SELL-QUEUED] %s -> pending_sells=%d' % (stock, len(g.pending_sells)))
             pos['last_close'] = cur_close
 
     g.rebalance_count += 1
@@ -722,6 +723,8 @@ def execute_pending_orders(context):
 
 
 def _execute_pending_orders_impl(context):
+    log.info('[EXEC-09:30] START sells=%d buys=%d holdings=%d' %
+             (len(g.pending_sells), len(g.pending_buys), len(g.holdings)))
     portfolio = context.portfolio
     cd = get_current_data()
     today = context.current_dt.date()
