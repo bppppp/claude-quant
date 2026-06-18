@@ -769,6 +769,14 @@ def _execute_pending_orders_impl(context):
         if sell_shares <= 0:
             del g.holdings[stock]
             continue
+        # Diagnostic: check JQ portfolio vs our tracking
+        jq_pos = context.portfolio.positions[stock] if stock in context.portfolio.positions else None
+        jq_shares = int(jq_pos.closeable_amount) if jq_pos else 0
+        if jq_shares < sell_shares:
+            log.error('[SELL-FAIL] %s our=%d jq_closeable=%d price=%.2f reason=%s' %
+                     (stock, sell_shares, jq_shares, exec_price, reason))
+            new_pending_sells.append((stock, ratio, reason, queue_date))
+            continue
         order_result = None
         if stock.startswith('688'):
             limit_price = min(exec_price * 0.995, 9999.99)
