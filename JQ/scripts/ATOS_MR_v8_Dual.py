@@ -313,11 +313,16 @@ def compute_all_signals(stock_list, g):
         elif drop_5d < -0.08 and rsi6 < 30:
             if g.regime == 'BULL': candidates.append((stock, 1, drop_5d, rsi6, cc))
     # -- Signal B: Trend --
-    if len(candidates) == 0:
-        candidates += _compute_trend_signals(stock_list, cd)
+    candidates += _compute_trend_signals(stock_list, cd)
     # -- Signal C: Breakout High --
-    if len(candidates) == 0:
-        candidates += _compute_breakout_signals(stock_list, cd)
+    candidates += _compute_breakout_signals(stock_list, cd)
+    # Dedup: keep best (lowest prio) entry per stock
+    seen = {}
+    for c in candidates:
+        s = c[0]
+        if s not in seen or c[1] < seen[s][1]:
+            seen[s] = c
+    candidates = list(seen.values())
     # v8 sort: prio asc, drop asc (deeper first), RSI asc
     candidates.sort(key=lambda x: (x[1], x[2], x[3]))
     return candidates
@@ -361,7 +366,7 @@ def _compute_breakout_signals(stock_list, cd):
             if len(close_s) < 21: continue
         except KeyError: continue
         c = float(close_s.iloc[-1])
-        h20 = max(float(high_s.iloc[i]) for i in range(max(0, len(high_s)-20), len(high_s)-1))
+        h20 = max(float(high_s.iloc[i]) for i in range(max(0, len(high_s)-21), len(high_s)-1))
         ma20 = calc_sma(list(close_s), 20)
         ma60 = calc_sma(list(close_s), 60) if len(close_s) >= 60 else 0
         if not all(np.isfinite([c, h20, ma20, ma60])): continue
