@@ -247,13 +247,14 @@ def calc_sma(close_list, period):
     if n < period: return float('nan')
     return sum(float(x) for x in close_list[-period:]) / period
 
-# ==================== Regime Detection ====================
-def detect_regime_jq(context):
+# ==================== Regime Detection (matches local detect_full_regime) ====================
+def _raw_regime(context):
+    """Raw 4-state + choppy_bear detection (T-3 lag, no hysteresis)"""
     market = '000300.XSHG'
     h = attribute_history(market, 120, '1d', ['close','high','low','volume'], df=True, fq='pre')
-    if h is None or h.empty: return 'SIDEWAYS'
+    if h is None or h.empty: return 'SIDEWAYS', False
     close = h['close']; vol = h['volume']; n = len(close)
-    if n < 63: return 'SIDEWAYS'
+    if n < 63: return 'SIDEWAYS', False
     ma20 = close.rolling(20).mean(); ma60 = close.rolling(60).mean()
     log_ret = np.log(close / close.shift(1))
     vol_20d = log_ret.rolling(20).std() * np.sqrt(252)
@@ -266,7 +267,7 @@ def detect_regime_jq(context):
     vol_20_avg = float(vol.rolling(20).mean().iloc[idx])
     vol_ratio = float(vol.iloc[idx]) / vol_20_avg if vol_20_avg > 0 else 1.0
     if not all(np.isfinite([c_t3, ma20_t3, ma60_t3, ret_20d_t3, vol_20d_t3, dd_5d_t3, dd_20d_t3])):
-        return 'SIDEWAYS'
+        return 'SIDEWAYS', False
     is_crash = (dd_5d_t3 <= -0.08 or dd_20d_t3 <= -0.15 or
                 (vol_20d_t3 > 0.35 and dd_5d_t3 < -0.05) or
                 (vol_ratio > 2.0 and dd_5d_t3 < -0.03))
@@ -284,8 +285,70 @@ def detect_regime_jq(context):
     ma60_slope = (ma60_t3 - ma60_20d_ago) / (ma60_20d_ago + 1e-9)
     choppy_score = sum([cum_ret_60d < -0.05, vol_60d < 0.18,
                         abs(ma60_slope) < 0.00025, ma20_t3 < ma60_t3])
-    if choppy_score >= 3: return 'CHOPPY_BEAR'
-    return base_state
+    is_choppy = choppy_score >= 3
+    if is_choppy: return 'CHOPPY_BEAR', True
+    return base_state, False
+
+
+def detect_regime_jq(context):
+    """Full pipeline: raw detection + hysteresis (min_dur=3, cooldown=5) + CHOPPY_BEAR grace (3d)"""
+    today = context.current_dt.date()
+    proposed, is_choppy = _raw_regime(context)
+
+    # Initialize persistent state
+    if not hasattr(g, '_regime_state'):
+        g._regime_state = 'SIDEWAYS'       # confirmed state
+        g._regime_candidate = 'SIDEWAYS'   # proposed new state
+        g._regime_cand_count = 0           # consecutive days proposed
+        g._regime_last_switch = today
+        g._choppy_was_active = False
+        g._choppy_end_date = today
+
+    # ---- Step 1: CRASH bypasses hysteresis ----
+    if proposed == 'CRASH':
+        g._regime_state = 'CRASH'
+        g._regime_candidate = 'CRASH'
+        g._regime_cand_count = 0
+        g._regime_last_switch = today
+        return 'CRASH'
+
+    # ---- Step 2: Cooldown (5 trading days after switch) ----
+    days_since_switch = (today - g._regime_last_switch).days
+    if days_since_switch < 7:  # ~5 trading days in calendar days
+        return g._regime_state
+
+    # ---- Step 3: Hysteresis (min_duration=3) ----
+    if proposed == g._regime_state:
+        g._regime_cand_count = 0
+        result = g._regime_state
+    elif proposed == g._regime_candidate:
+        g._regime_cand_count += 1
+        if g._regime_cand_count >= 3:
+            g._regime_state = proposed
+            g._regime_last_switch = today
+            g._regime_cand_count = 0
+            result = proposed
+        else:
+            result = g._regime_state
+    else:
+        g._regime_candidate = proposed
+        g._regime_cand_count = 1
+        result = g._regime_state
+
+    # ---- Step 4: CHOPPY_BEAR grace (3-day transition into BULL) ----
+    if is_choppy:
+        g._choppy_was_active = True
+        g._choppy_end_date = today
+        return 'CHOPPY_BEAR'
+    elif g._choppy_was_active and result == 'BULL':
+        grace_days = (today - g._choppy_end_date).days
+        if grace_days < 5:  # ~3 trading days
+            return 'CHOPPY_BEAR'
+        g._choppy_was_active = False
+    else:
+        g._choppy_was_active = False
+
+    return result
 
 # ==================== Signal Computation (v8: 4-signal + depth sort) ====================
 def compute_all_signals(stock_list, g):
@@ -428,6 +491,9 @@ def initialize(context):
     g.holdings = {}
     g.regime = 'SIDEWAYS'
     g.bar_index = 0
+    g._regime_state = 'SIDEWAYS'; g._regime_candidate = 'SIDEWAYS'
+    g._regime_cand_count = 0; g._regime_last_switch = None
+    g._choppy_was_active = False; g._choppy_end_date = None
     run_daily(daily_handle, '09:30')
     log.info('ATOS MR v8: stock_pool=%s universe=%d trading=%d'
              % (STOCK_POOL, len(g.universe), len(TRADING_UNIVERSE_JQ)))

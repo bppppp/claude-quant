@@ -110,12 +110,13 @@ def calc_rsi(close_list, period=6):
     if avg_loss == 0: return 100.0
     return 100.0 - 100.0 / (1.0 + avg_gain / avg_loss)
 
-def detect_regime_jq(context):
+# ==================== Regime Detection (matches local detect_full_regime) ====================
+def _raw_regime(context):
     market = '000300.XSHG'
     h = attribute_history(market, 120, '1d', ['close','high','low','volume'], df=True, fq='pre')
-    if h is None or h.empty: return 'SIDEWAYS'
+    if h is None or h.empty: return 'SIDEWAYS', False
     close = h['close']; vol = h['volume']; n = len(close)
-    if n < 63: return 'SIDEWAYS'
+    if n < 63: return 'SIDEWAYS', False
     ma20 = close.rolling(20).mean(); ma60 = close.rolling(60).mean()
     log_ret = np.log(close / close.shift(1))
     vol_20d = log_ret.rolling(20).std() * np.sqrt(252)
@@ -128,7 +129,7 @@ def detect_regime_jq(context):
     vol_20_avg = float(vol.rolling(20).mean().iloc[idx])
     vol_ratio = float(vol.iloc[idx]) / vol_20_avg if vol_20_avg > 0 else 1.0
     if not all(np.isfinite([c_t3, ma20_t3, ma60_t3, ret_20d_t3, vol_20d_t3, dd_5d_t3, dd_20d_t3])):
-        return 'SIDEWAYS'
+        return 'SIDEWAYS', False
     is_crash = (dd_5d_t3 <= -0.08 or dd_20d_t3 <= -0.15 or
                 (vol_20d_t3 > 0.35 and dd_5d_t3 < -0.05) or
                 (vol_ratio > 2.0 and dd_5d_t3 < -0.03))
@@ -146,8 +147,45 @@ def detect_regime_jq(context):
     ma60_slope = (ma60_t3 - ma60_20d_ago) / (ma60_20d_ago + 1e-9)
     choppy_score = sum([cum_ret_60d < -0.05, vol_60d < 0.18,
                         abs(ma60_slope) < 0.00025, ma20_t3 < ma60_t3])
-    if choppy_score >= 3: return 'CHOPPY_BEAR'
-    return base_state
+    is_choppy = choppy_score >= 3
+    if is_choppy: return 'CHOPPY_BEAR', True
+    return base_state, False
+
+
+def detect_regime_jq(context):
+    today = context.current_dt.date()
+    proposed, is_choppy = _raw_regime(context)
+    if not hasattr(g, '_regime_state'):
+        g._regime_state = 'SIDEWAYS'; g._regime_candidate = 'SIDEWAYS'
+        g._regime_cand_count = 0; g._regime_last_switch = today
+        g._choppy_was_active = False; g._choppy_end_date = today
+    if proposed == 'CRASH':
+        g._regime_state = 'CRASH'; g._regime_candidate = 'CRASH'
+        g._regime_cand_count = 0; g._regime_last_switch = today
+        return 'CRASH'
+    days_since_switch = (today - g._regime_last_switch).days
+    if days_since_switch < 7:
+        return g._regime_state
+    if proposed == g._regime_state:
+        g._regime_cand_count = 0; result = g._regime_state
+    elif proposed == g._regime_candidate:
+        g._regime_cand_count += 1
+        if g._regime_cand_count >= 3:
+            g._regime_state = proposed; g._regime_last_switch = today
+            g._regime_cand_count = 0; result = proposed
+        else: result = g._regime_state
+    else:
+        g._regime_candidate = proposed; g._regime_cand_count = 1
+        result = g._regime_state
+    if is_choppy:
+        g._choppy_was_active = True; g._choppy_end_date = today
+        return 'CHOPPY_BEAR'
+    elif g._choppy_was_active and result == 'BULL':
+        if (today - g._choppy_end_date).days < 5:
+            return 'CHOPPY_BEAR'
+        g._choppy_was_active = False
+    else: g._choppy_was_active = False
+    return result
 
 def compute_signals_jq(stock_list, g):
     n = 30
@@ -210,6 +248,9 @@ def initialize(context):
     g.holdings = {}
     g.regime = 'SIDEWAYS'
     g.bar_index = 0
+    g._regime_state = 'SIDEWAYS'; g._regime_candidate = 'SIDEWAYS'
+    g._regime_cand_count = 0; g._regime_last_switch = None
+    g._choppy_was_active = False; g._choppy_end_date = None
     run_daily(daily_handle, '09:30')
     log.info('ATOS MR v5 BASE: universe=%d trading=%d' % (len(g.universe), len(TRADING_UNIVERSE_JQ)))
 
