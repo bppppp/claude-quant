@@ -515,7 +515,6 @@ def daily_handle(context):
         try: d = cd[stock]
         except KeyError: continue
         h['last_close'] = float(d.last_price) if d.last_price > 0 else h.get('last_close', h['entry_price'])
-        h['holding_days'] = h.get('holding_days', 0) + 1
 
     # ---- Step 2: exit check & execute ----
     for stock, h in list(g.holdings.items()):
@@ -525,7 +524,8 @@ def daily_handle(context):
         cur_close = float(d.last_price)
         if cur_close <= 0: continue
         ret = (cur_close - h['entry_price']) / h['entry_price']
-        days_held = h.get('holding_days', 0)
+        # Calendar days (matches local L305: (date - entry_date).days)
+        days_held = (today - h['entry_date']).days
         is_corp = check_corp_action(stock)
         should_sell = False; reason = ''
         if is_corp: should_sell = True; reason = 'corp_action'
@@ -558,12 +558,15 @@ def daily_handle(context):
     candidates = compute_all_signals(available, g)
     n_to_buy = PARAMS['max_positions'] - len(g.holdings)
     if g.regime != 'CRASH' and n_to_buy > 0:
-        for i, (stock, prio, drop, rsi, close) in enumerate(candidates[:n_to_buy]):
+        bought = 0
+        for stock, prio, drop, rsi, close in candidates:
+            if bought >= n_to_buy: break
             if not check_filters(stock, cd): continue
             if not check_recent_extreme(stock): continue
             sig_name = ['MR','MR2','TREND','BRKOUT'][min(prio,3)]
             _execute_buy(stock, cd, cash, total_value, regime_mult, context)
             cash = context.portfolio.available_cash
+            bought += 1
             log.info('[BUY] %s prio=%d(%s) drop=%.2f%% rsi=%.0f' %
                      (stock, prio, sig_name, drop*100, rsi))
 
@@ -579,7 +582,7 @@ def _execute_buy(stock, cd, cash, total_value, regime_mult, context):
     last_price = float(d.last_price)
     if last_price <= 0 or not np.isfinite(last_price): return
     per_value = total_value * PARAMS['position_pct'] * regime_mult
-    shares = int(per_value / (last_price * 1.001) / 100) * 100
+    shares = int(per_value / last_price / 100) * 100
     if shares < 100: shares = 100
     cost = shares * last_price * 1.001
     if cost > cash * 0.95:
