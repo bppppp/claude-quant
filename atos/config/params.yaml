@@ -1,0 +1,121 @@
+strategy_version: "ATOS9_v8"
+
+symbol: "510300"
+initial_capital: 1000000
+commission_rate: 0.00025
+stamp_tax_rate: 0.001
+
+default_start: "2018-01-01"
+default_end: "2020-04-30"
+default_universe: "CSI1000"
+
+bull_threshold: 70
+bear_threshold: 30
+crash_threshold: 15
+crash_volatility_th: 0.30
+crash_5d_drawdown: -0.04
+crash_20d_drawdown: -0.10
+min_duration: 1
+cooldown_days: 2
+
+adx_bull_threshold: 0
+rsi_bear_threshold: 40
+
+target_vol: 0.15
+max_position: 0.95
+base_position:
+  BULL: 0.30
+  SIDEWAYS: 0.90
+  BEAR: 0.80
+  CRASH: 0.00
+  CHOPPY_BEAR: 0.50
+  STAGE_1: 0.50
+  STAGE_2: 0.30
+  STAGE_3: 0.50
+  STAGE_4: 0.60
+
+atr_base_k:
+  BULL: 3.0
+  SIDEWAYS: 2.0
+  BEAR: 1.5
+  CRASH: 1.0
+  CHOPPY_BEAR: 1.5
+hard_stop_pct: -0.05
+atr_k_min: 1.2
+atr_k_max: 4.0
+
+partial_take_profit:
+  BULL:
+    - {threshold: 0.08, ratio: 0.33}
+    - {threshold: 0.15, ratio: 0.50}
+  SIDEWAYS:
+    - {threshold: 0.05, ratio: 0.50}
+  BEAR:
+    - {threshold: 0.03, ratio: 1.00}
+  CHOPPY_BEAR:
+    - {threshold: 0.03, ratio: 0.33}
+    - {threshold: 0.05, ratio: 1.00}
+  CRASH: []
+
+max_holding_days:
+  BULL: 3
+  SIDEWAYS: 3
+  BEAR: 3
+  CRASH: 1
+  CHOPPY_BEAR: 3
+
+top_n_stocks:
+  BULL: 10
+  SIDEWAYS: 10
+  BEAR: 10
+  CRASH: 0
+  CHOPPY_BEAR: 10
+factor_lookback: 60
+
+open_threshold_by_regime:
+  BULL: 0.30
+  SIDEWAYS: 0.20
+  BEAR: 0.20
+  CHOPPY_BEAR: 0.40
+choppy_bear_score_th: 3
+choppy_bear_max_pos: 0.20
+choppy_bear_holding_days: 5
+
+single_stock_loss_limit: -0.03
+daily_loss_limit: -0.02
+monthly_loss_limit: -0.05
+quarterly_loss_limit: -0.10
+yearly_loss_limit: -0.15
+
+market_breadth: 1.0
+rolling_winrate_20d: 0.5
+realized_vol_20d: 0.15
+
+single_cap_max:
+  BULL: 0.15
+  SIDEWAYS: 0.10
+  BEAR: 0.05
+  CRASH: 0.00
+  CHOPPY_BEAR: 0.03
+single_cap_safety_factor: 0.9
+
+style_exposure:
+  large_cap: 0.6
+  mid_cap: 0.3
+  small_cap: 0.1
+
+kelly_multiplier: 0.6
+drawdown_step_enabled: true
+liquidity_filter_enabled: true
+
+ic_weighted: true
+ic_min_threshold: 0.02
+ic_lookback_days: 120
+adaptive_kelly_enabled: true
+kelly_adaptive_high: 1.5
+kelly_adaptive_low: 0.5
+per_universe_overrides: {}
+
+random_seed: 42
+log_level: "INFO"
+benchmark_name: "hs300"

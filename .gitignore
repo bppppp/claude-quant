@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Data (large files)
+data/data-by-day/
+data/data-by-day-bs/
+data/data-by-stock/
+data/data-by-stock-bs/
+data/data-benchmark/
+data/data-by-stock-factor/
+data/processed/
+
+# Logs
+atos/logs/
+atos/results/
+
+# IDE
+.vscode/
+.idea/
+
+# Temp
+tmp/__pycache__/
+
+# OS
+.DS_Store
+Thumbs.db
