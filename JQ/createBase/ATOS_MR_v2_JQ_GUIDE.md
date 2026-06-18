@@ -642,6 +642,49 @@ A: cd[stock].last_price (09:30 后)。
 **Q5: T+1 实现?**
 A: JQ 默认 T+1, 用 pending 队列模拟 T 日决策 + T+1 09:30 撮合。
 
+---
+
+## 8.5 ⚠️ `order(stock, -shares)` 卖不出 → 必须用 `order_target_value(stock, 0)` 清仓
+
+**症状**: 卖出信号每天排队，`[SELL]` 日志反复出现，但 `order()` 始终返回 `None` 或 `filled=0`，持仓锁死，现金永不回笼。
+
+**根因**:
+```python
+# 错: 手动算股数卖出, 和自己追踪的 g.holdings 耦合
+order(stock, -sell_shares)  # JQ 拒绝：你账户里实际股数和你算的不一致
+
+# 对: 让 JQ 自己查持仓、自己算股数
+order_target_value(stock, 0)  # JQ 说：好, 我把这个全卖了
+```
+
+**原理**: 
+- 手动 `g.holdings` 追踪的股数和 JQ `portfolio.positions` 实际持仓可能不一致（买入成交股数偏差、T+1 结算延迟、部分成交等）
+- `order(stock, -shares)` 依赖你告诉 JQ 精确股数，差 1 股都失败
+- `order_target_value(stock, 0)` 告诉 JQ "目标市值 = 0"（全清），JQ 自己解决股数问题
+
+**正确写法**:
+```python
+# 非科创板: 清仓用 order_target_value
+order_result = order_target_value(stock, 0)
+
+# 科创板 688: 必须限价单, 仍用 order(-shares) 但检查 filled
+limit_price = min(open_px * 0.995, 9999.99)
+order_result = order(stock, -shares, LimitOrderStyle(limit_price))
+
+# 必须检查双重失败
+if order_result is None or (hasattr(order_result, 'filled') and order_result.filled == 0):
+    # None = JQ 拒绝下单; filled=0 = 下单了但未成交
+    # 重新排队下次再试
+```
+
+**买入同样需要检查 `filled`**:
+```python
+order_result = order(stock, shares)
+if order_result is None or (hasattr(order_result, 'filled') and order_result.filled == 0):
+    continue  # 没买到, 不记录持仓
+# 只有 filled > 0 才记入 g.holdings
+```
+
 **Q6: 调试?**
 A: log.info() 输出到日志, record() 保存到收益图。
 
