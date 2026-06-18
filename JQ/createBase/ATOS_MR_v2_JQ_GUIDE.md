@@ -539,6 +539,92 @@ log.info("[%s] regime=%s, holdings=%d, pending_buys=%d, pending_sells=%d, signal
 
 ---
 
+## 8. 血泪教训：聚宽调试中发现的致命问题
+
+### 8.1 ⚠️ 循环内 `cash` 变量不更新 → 瞬间满仓耗尽资金
+
+**症状**: 策略第 1-2 天就买满 20+ 只，现金从 1,000,000 骤降到 138。
+
+**根因**:
+```python
+cash = portfolio.available_cash  # ← 在循环前只取一次
+
+for stock, sig_date, sig_close in g.pending_buys:
+    ...
+    if cost > cash * 0.95:  # ← 所有订单都看到同样的 cash 值！
+        affordable = int(cash * 0.95 / ...)  # ← 第一个订单后现金已减少
+```
+
+每个待执行买单都以**循环开始时的现金余额**做可负担性检查。第一个订单扣款后，第二个订单还看到原始现金，以为买得起——实际早就没钱了。20 个订单排队 = 20 个都"以为买得起"。
+
+**修复**:
+```python
+# 方案 A: 每笔成交后立即扣减跟踪值
+order(stock, shares)
+cash -= shares * last_price * 1.001  # 手动跟踪
+
+# 方案 B: 每笔成交后刷新（推荐，更准确）
+order(stock, shares)
+cash = context.portfolio.available_cash  # 从 JQ 重新获取
+```
+
+**影响范围**: 任何批量处理买单的循环。本地回测 `mr_v2.py` 循环内逐笔扣减现金（`cash -= cost`），不存在此问题——但 JQ 的 `portfolio.available_cash` 在循环内不会自动刷新。
+
+### 8.2 ⚠️ `np.busday_count` 在聚宽不可用 → 退出检查静默崩溃
+
+**症状**: 策略只买不卖，持仓数永远是 20-22，现金从 138 慢慢涨（仅分红），`pending_sells` 始终为 0，零笔卖出。
+
+**根因**:
+```python
+days_held = np.busday_count(pos['entry_date'], today)  # JQ 的 numpy 没有这个函数！
+```
+
+聚宽的 numpy 是精简版，`busday_count` 不可用。调用时：
+- **不抛异常**（某些 JQ 版本返回 0）
+- **返回 0** → `days_held >= 8` 永远为 False → **时间止损永远不触发**
+- 如果抛 `AttributeError` → `check_signals_and_queue_orders` 整体崩溃 → 卖出永远不排队 → 持仓锁死
+
+**修复**:
+```python
+# 替代方案：手动估算交易日数
+days_held = (today - pos['entry_date']).days
+days_held = int(days_held * 5.0 / 7.0)  # 日历日 × 5/7 ≈ 交易日
+```
+
+**影响范围**: 任何依赖 `np.busday_count` 的持仓天数计算。
+
+### 8.3 防御性编程：关键函数必须包裹 try/except
+
+```python
+def check_signals_and_queue_orders(context):
+    try:
+        _check_signals_and_queue_orders_impl(context)
+    except Exception as e:
+        log.error('[%s] check_signals CRASH: %s' % (context.current_dt.date(), str(e)))
+
+def execute_pending_orders(context):
+    try:
+        _execute_pending_orders_impl(context)
+    except Exception as e:
+        log.error('[%s] execute_orders CRASH: %s' % (context.current_dt.date(), str(e)))
+```
+
+**不加保护的下场**: 函数内任何异常（如 `np.busday_count` 不可用、`cd[stock]` KeyError 没被局部 try/except 兜住）→ 函数静默退出 → 当天所有信号计算 + 出场检查全部跳过 → 策略"在运行"但实际每天跳空。
+
+### 8.4 诊断日志节奏
+
+每 60 次调仓打印一次（约每季度），太快刷屏，太慢无法定位问题。建议额外加：
+
+```python
+# 每天打印关键计数（仅在非零时）
+if len(signals) > 0 or len(g.pending_sells) > 0 or len(g.pending_buys) > 0:
+    log.info('[%s] signals=%d, sells=%d, buys=%d' % (...))
+```
+
+这样可以立即发现"今天有信号但没有成交"或"卖出排队了但没有执行"的问题。
+
+---
+
 ## 8. FAQ
 
 **Q1: 聚宽无交易但本地有?**

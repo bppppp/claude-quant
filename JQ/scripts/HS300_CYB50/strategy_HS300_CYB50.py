@@ -3129,6 +3129,13 @@ def check_signals_and_queue_orders(context):
     2. 检查持仓出场信号, 排队 pending_sells (T+1 09:30 成交)
     3. 持仓首日跳过 (T+1 锁)
     """
+    try:
+        _check_signals_and_queue_orders_impl(context)
+    except Exception as e:
+        log.error('[%s] check_signals CRASH: %s' % (context.current_dt.date(), str(e)))
+
+
+def _check_signals_and_queue_orders_impl(context):
     portfolio = context.portfolio
     cd = get_current_data()
     cash = portfolio.available_cash
@@ -3191,7 +3198,9 @@ def check_signals_and_queue_orders(context):
             continue
 
         ret = (cur_close - pos['entry_price']) / pos['entry_price']
-        days_held = np.busday_count(pos['entry_date'], today)
+        # Manual trading-day count (np.busday_count not available in JQ)
+        days_held = (today - pos['entry_date']).days
+        days_held = int(days_held * 5.0 / 7.0)
 
         # 除权除息检测
         is_corp = check_corp_action(stock)
@@ -3224,12 +3233,14 @@ def check_signals_and_queue_orders(context):
 
 # ==================== T+1 09:30 撮合 ====================
 def execute_pending_orders(context):
-    """T+1 09:30 执行 pending_buys 和 pending_sells
+    """T+1 09:30 执行 pending_buys 和 pending_sells"""
+    try:
+        _execute_pending_orders_impl(context)
+    except Exception as e:
+        log.error('[%s] execute_orders CRASH: %s' % (context.current_dt.date(), str(e)))
 
-    卖出使用 T+1 09:30 开盘价
-    买入使用 T+1 09:30 开盘价
-    跌停/停牌时: 卖出挂单等待 (最多 20 天)
-    """
+
+def _execute_pending_orders_impl(context):
     portfolio = context.portfolio
     cd = get_current_data()
     today = context.current_dt.date()
@@ -3350,11 +3361,13 @@ def execute_pending_orders(context):
             limit_price = min(last_price * 1.005, 9999.99)
             try:
                 order(stock, shares, LimitOrderStyle(limit_price))
+                cash -= shares * last_price * 1.001
             except Exception:
                 continue
         else:
             try:
                 order(stock, shares)
+                cash -= shares * last_price * 1.001
             except Exception:
                 continue
         # 记录持仓
@@ -3364,6 +3377,7 @@ def execute_pending_orders(context):
             'shares': shares,
             'last_close': last_price,
         }
+        cash = context.portfolio.available_cash
         log.info('[BUY] %s @ %.2f, shares=%d, sig_type=%s'
                  % (stock, last_price, shares, sig_close))
     g.pending_buys = new_pending_buys
