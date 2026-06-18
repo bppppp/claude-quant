@@ -47,7 +47,7 @@ def _compute_signal_v2(df):
 
 
 def _compute_signal_v2_secondary(df):
-    """v2 副信号: drop<-8% AND RSI6<30 (温和超卖, BULL 用)"""
+    """v2 副信号: drop<-8% AND RSI6<30"""
     rsi6 = df['RSI6']
     if isinstance(rsi6, pd.DataFrame):
         rsi6 = rsi6.iloc[:, 0]
@@ -62,6 +62,7 @@ def _compute_signal_v2_secondary(df):
 def backtest_v2(start='2018-01-01', end='2022-12-31',
                  universe_name='HS300',
                  trading_universe_name=None,
+                 data_version='v2',
                  max_positions=20,
                  position_pct=0.15,
                  hold_days=10,
@@ -100,7 +101,7 @@ def backtest_v2(start='2018-01-01', end='2022-12-31',
         print('Universe (' + universe_name + '):', len(universe), 'stocks')
 
     # 2. 加载大盘（用于状态识别）
-    market = load_processed_benchmark('hs300', start=start, end=end)
+    market = load_processed_benchmark('hs300', start=start, end=end, version=data_version)
     if market is None or len(market) == 0:
         raise ValueError('No market data')
 
@@ -111,7 +112,7 @@ def backtest_v2(start='2018-01-01', end='2022-12-31',
     signals = {}
     signals_secondary = {}
     for sym in universe:
-        df = load_processed(sym, start=start, end=end)
+        df = load_processed(sym, start=start, end=end, version=data_version)
         if df is None or len(df) < 100:
             continue
         if not isinstance(df.index, pd.DatetimeIndex):
@@ -414,8 +415,14 @@ def backtest_v2(start='2018-01-01', end='2022-12-31',
                     except Exception:
                         pass
                     rsi6 = float(df.loc[date, 'RSI6']) if 'RSI6' in df.columns else 50
+                    # 5日跌幅
+                    try:
+                        c0 = float(df.loc[date, 'close']); idx5 = max(0, df.index.get_loc(date) - 5)
+                        c5 = float(df.iloc[idx5]['close']); drop = c0 / c5 - 1 if c5 > 0 else 0
+                    except: drop = -0.05
                     prio = 0 if has_main else 1
-                    candidates.append((sym, rsi6, prio, float(df.loc[date, 'close'])))
+                    # 排序用: (优先级, 跌幅越深越前, RSI越低越前)
+                    candidates.append((sym, prio, drop, rsi6, float(df.loc[date, 'close'])))
 
                 # v6: 趋势跟踪信号 (MA20突破+放量, 牛市补充)
                 # 只在MR信号不足时启用
@@ -444,7 +451,7 @@ def backtest_v2(start='2018-01-01', end='2022-12-31',
                                 if c > ma20 and c1 < ma20 and v > 1.2 * v20:
                                     if 'is_st' not in df.columns or not bool(df.loc[date, 'is_st']):
                                         if 'volume' not in df.columns or float(df.loc[date, 'volume']) > 0:
-                                            candidates.append((sym, 99, 2, c))  # prio=2, RSI虚拟
+                                            candidates.append((sym, 2, -0.05, 50, c))
                         except Exception:
                             pass
 
@@ -469,15 +476,14 @@ def backtest_v2(start='2018-01-01', end='2022-12-31',
                                 if c > h20 and ma20 > ma60:
                                     if 'is_st' not in df.columns or not bool(df.loc[date, 'is_st']):
                                         if 'volume' not in df.columns or float(df.loc[date, 'volume']) > 0:
-                                            candidates.append((sym, 50, 3, c))
+                                            candidates.append((sym, 3, -0.05, 50, c))
                         except Exception:
                             pass
 
-                # 排序: 主信号优先, RSI升序, 趋势最后
-                candidates.sort(key=lambda x: (x[2], x[1]))
+                # 排序: 优先级升序, 跌幅升序(越深越前), RSI升序
+                candidates.sort(key=lambda x: (x[1], x[2], x[3]))
                 for cand in candidates[:n_to_buy]:
-                    sym = cand[0]
-                    pending_buys.append((sym, date))
+                    sym = cand[0]; pending_buys.append((sym, date))
 
         pos_value = 0.0
         for sym, pos in positions.items():
