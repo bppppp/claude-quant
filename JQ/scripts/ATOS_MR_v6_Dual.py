@@ -769,19 +769,26 @@ def _execute_pending_orders_impl(context):
         if sell_shares <= 0:
             del g.holdings[stock]
             continue
+        order_result = None
         if stock.startswith('688'):
             limit_price = min(exec_price * 0.995, 9999.99)
             try:
-                order(stock, -sell_shares, LimitOrderStyle(limit_price))
+                order_result = order(stock, -sell_shares, LimitOrderStyle(limit_price))
             except Exception:
                 new_pending_sells.append((stock, ratio, reason, queue_date))
                 continue
         else:
             try:
-                order(stock, -sell_shares)
+                order_result = order(stock, -sell_shares)
             except Exception:
                 new_pending_sells.append((stock, ratio, reason, queue_date))
                 continue
+        # JQ may return None on silent failure without throwing
+        if order_result is None:
+            new_pending_sells.append((stock, ratio, reason, queue_date))
+            continue
+        log.info('[SELL-DONE] %s @ %.2f shares=%d reason=%s' %
+                 (stock, exec_price, sell_shares, reason))
         del g.holdings[stock]
 
     g.pending_sells = new_pending_sells
@@ -824,20 +831,22 @@ def _execute_pending_orders_impl(context):
         if shares < 100 or shares * last_price * 1.001 > cash * 0.95:
             continue
 
+        order_result = None
         if stock.startswith('688'):
             limit_price = min(last_price * 1.005, 9999.99)
             try:
-                order(stock, shares, LimitOrderStyle(limit_price))
-                cash -= shares * last_price * 1.001
+                order_result = order(stock, shares, LimitOrderStyle(limit_price))
             except Exception:
                 continue
         else:
             try:
-                order(stock, shares)
-                cash -= shares * last_price * 1.001
+                order_result = order(stock, shares)
             except Exception:
                 continue
+        if order_result is None:
+            continue
 
+        cash -= shares * last_price * 1.001
         g.holdings[stock] = {
             'entry_date': today,
             'entry_price': last_price,
